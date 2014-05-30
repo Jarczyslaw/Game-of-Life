@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Drawing;
 using System.Linq;
 using System.Text;
@@ -9,172 +10,250 @@ namespace GameOfLife
 {
     public class Game
     {
-        public enum CellStates { DISABLED = 0,ENABLED = 1}
-        public BoardField[,] _Board { get; set; }
-        public GameCell[,] _Cells { get; set; }
-        public Bitmap _Canvas { get; set; }
-        public Bitmap _Snapshot { get; set; }
-        public int _GameRows { get; set; }
-        public int _GameCols { get; set; }
-        public int _GraphicsWidth { get; set; }
-        public int _GraphicsHeight { get; set; }
-        public int _BorderSize { get; set; }
-        public HitTestInfo _HitTestInfo { get; set; }
-        public List<CellPointer> _LastSelected { get; set; }
+        public enum GameStates { Paused,Run}
+        public GameStates GameState{ get; set; }
+        public Cell[,] NewIteration { get; set; }
+        public List<Cell[,]> Iterations { get; set; }
+        public Rectangle[,] Board { get; set; }
+        public List<CellState> CellStates { get; set; }
+        public int GameRows { get; set; }
+        public int GameCols { get; set; }
+        public int BorderSize { get; set; }
+        public HitTestInfo HitTest { get; set; }
+        public List<CellPointer> SelectedCells { get; set; }
 
         public class HitTestInfo
         {
-            public int _I { get; set; }
-            public int _J { get; set; }
-            public bool _FieldHit { get; set; }
+            public CellPointer Coord { get; set; }
+            public bool IsFieldHit { get; set; }
             public HitTestInfo()
             {
-                _FieldHit = false;
-                _I = -1;
-                _J = -1;
+                IsFieldHit = false;
+                Coord = new CellPointer();
             }
         }
 
-        public void m_TakeSnapshot()
+        public Game(int r, int c)
         {
-            
+            GameRows = r;
+            GameCols = c;
+            BorderSize = 1;
+            HitTest = new HitTestInfo();
+            SelectedCells = new List<CellPointer>();
+            GameState = GameStates.Paused;
+            Iterations = new List<Cell[,]>();
+            Board = InitializeArray<Rectangle>(GameRows, GameCols);
+            CellStates = new List<CellState>() { 
+                new CellState("Dead", Color.White),
+                new CellState("Alive", Color.Blue)
+            };
         }
 
-        public Game(int gameRows,int gameCols)
+        public void StartNewIteration()
         {
-            _GameRows = gameRows;
-            _GameCols = gameCols;
-            _BorderSize = 1;
-            _HitTestInfo = new HitTestInfo();
-            _LastSelected = new List<CellPointer>();
-            _Board = f_InitializeArray<BoardField>(_GameRows, _GameCols);
-            _Cells = f_InitializeArray<GameCell>(_GameRows, _GameCols);
+            NewIteration = InitializeArray<Cell>(GameRows, GameCols);
         }
 
-        public void m_SetBitmap(Bitmap bmp)
+        public void UpdateNewIteration(int startCol,int endCol)
         {
-            _Canvas = bmp;
-            _GraphicsWidth = x;
-            _GraphicsHeight = y;
-        }
-
-        public void m_Pause()
-        {
-            m_TakeSnapshot();
-            SolidBrush shadow = new SolidBrush(Color.FromArgb(128,136,136,136));
-            Rectangle rect = new Rectangle(0, 0, _GraphicsWidth, _GraphicsHeight);
-            _G.FillRectangle(shadow,rect);
-        }
-
-        public void m_Deselect(bool all)
-        {
-            if (all)
+            if (startCol == -1 || endCol == -1)
             {
-                for (int i = 0;i < _GameRows;i++)
+                startCol = 0;
+                endCol = GameCols - 1;
+            }    
+            Cell[,] old = Iterations.Last();
+            for (int i = 0; i < GameRows; i++)
+            {
+                for (int j = startCol; j <= endCol; j++)
                 {
-                    for (int j = 0;j < _GameCols;j++)
+                    int num = 0;
+                    int[] temp = Neightbourhood(old, i, j);
+                    for (int k = 0; k < temp.Length; k++)
                     {
-                        _Cells[i, j]._Selected = false;
+                        if (temp[k] != -1)
+                        {
+                            if (temp[k] == 1)
+                            {
+                                num++;
+                            }
+                        }
+                    }
+                    if (old[i, j].State == 1)
+                    {
+                        if (num == 2 || num == 3)
+                        {
+                            NewIteration[i, j].State = 1;
+                        }
+                        else
+                        {
+                            NewIteration[i, j].State = 0;
+                        }
+                    }
+                    else
+                    {
+                        if (num == 3)
+                        {
+                            NewIteration[i, j].State = 1;
+                        }
+                        else
+                        {
+                            NewIteration[i, j].State = 0;
+                        }
                     }
                 }
             }
-            else
-            {
-                foreach(CellPointer cp in _LastSelected)
-                {
-                    _Cells[cp._I, cp._J]._Selected = false;
-                }
-            }
         }
 
-        public void m_SelectCellsInRange(CellPointer start, CellPointer end)
+        public void DrawIteration(Graphics g,int width,int height, Cell[,] cells,int startCol, int endCol)
         {
-            _LastSelected.Clear();   
-            int startI,endI;
-            int startJ,endJ;
-            if (end._I - start._I > 0)
+            if (startCol == -1 || endCol == -1)
             {
-                startI = start._I;
-                endI = end._I;
+                startCol = 0;
+                endCol = GameCols - 1;
             }
-            else
+            DrawBackground(g, width,height);
+            // because SolidBrush can't be shared between thread there's a need to create local deep copy od cell states pallete
+            SolidBrush[] pallete = new SolidBrush[CellStates.Count];
+            for (int i = 0; i < CellStates.Count;i++)
             {
-                startI = end._I;
-                endI = start._I;
+                pallete[i] = new SolidBrush(CellStates[i].BoardColor);
             }
-            if (end._J - start._J > 0)
+            for (int i = 0; i < GameRows; i++)
             {
-                startJ = start._J;
-                endJ = end._J;
-            }
-            else
-            {
-                startJ = end._J;
-                endJ = start._J;
-            }
-            for (int i = startI;i <= endI;i++)
-            {
-                for(int j = startJ;j <= endJ;j++)
+                for (int j = startCol; j <= endCol; j++)
                 {
-                    _LastSelected.Add(new CellPointer(i, j));
-                    _Cells[i, j]._Selected = true;
+                    DrawField(g, pallete, cells[i, j], Board[i,j]);
                 }
             }
+            
         }
 
-        public void m_ToggleCellState(int i, int j)
+        public void EndIteration()
         {
-            if (_Cells[i, j]._State == Game.CellStates.ENABLED)
-            {
-                _Cells[i, j]._State = Game.CellStates.DISABLED;
-            }
-            else if (_Cells[i, j]._State == Game.CellStates.DISABLED)
-            {
-                _Cells[i, j]._State = Game.CellStates.ENABLED;
-            }
-            m_UpdateBoardField(i, j);
-            m_DrawField(i, j);
+            Iterations.Add(NewIteration);
+            NewIteration = null;
         }
 
-        public void m_UpdateBoardField(int i,int j)
+        public int[] Neightbourhood(Cell[,] cells,int i,int j)
         {
-            if (_Cells[i, j]._Selected)
+            int[] res = new int[9];
+            int counter = 0;
+            for (int k = i - 1; k <= i + 1;k++ )
             {
-                _Board[i, j]._Color = Color.Teal;
-            }
-            else
-            {
-                if (_Cells[i, j]._State == CellStates.ENABLED)
+                for(int l = j - 1;l <= j + 1;l++)
                 {
-                    _Board[i, j]._Color = Color.Green;
-                }
-                else if (_Cells[i, j]._State == CellStates.DISABLED)
-                {
-                    _Board[i, j]._Color = Color.Red;
-                }
-            }          
-        }
-
-        public void m_HitTest(int x,int y)
-        {
-            BoardField bf;
-            _HitTestInfo._I = -1;
-            _HitTestInfo._J = -1;
-            _HitTestInfo._FieldHit = false;
-            for (int i = 0; i < _GameRows; i++)
-            {
-                bf = _Board[i,0];
-                if (y >= bf._Y && y <= (bf._Y + bf._Height))
-                {
-                    for (int j = 0;j < _GameCols;j++)
+                    if (k >= 0 && (k <= GameRows - 1) && l >= 0 && (l <= GameCols - 1) && !(k == i && l == j))
                     {
-                        bf = _Board[i,j];
-                        if (x >= bf._X && x <= (bf._X + bf._Width))
-                        {                          
-                            _HitTestInfo._I = i;
-                            _HitTestInfo._J = j;
-                            _HitTestInfo._FieldHit = true;
-                            i = _GameRows;
+                        res[counter] = cells[k, l].State;
+                    }
+                    else
+                    {
+                        res[counter] = -1;
+                    }
+                    counter++;
+                }
+            }
+            return res;
+        }
+
+
+
+        public void Pause()
+        {
+            GameState = GameStates.Paused;
+            //f_TakeSnapshot();          
+            //SolidBrush shadow = new SolidBrush(Color.FromArgb(128,136,136,136));
+            //Rectangle rect = new Rectangle(0, 0, m_graphicsWidth, m_graphicsHeight);
+            //m_g.FillRectangle(shadow,rect);
+                     
+        }
+
+        //public void Deselect(bool all)
+        //{
+        //    if (all)
+        //    {
+        //        for (int i = 0;i < GameRows;i++)
+        //        {
+        //            for (int j = 0;j < GameCols;j++)
+        //            {
+        //                Cells[i, j].IsSelected = false;
+        //            }
+        //        }
+        //    }
+        //    else
+        //    {
+        //        foreach(CellPointer cp in SelectedCells)
+        //        {
+        //            Cells[cp.I, cp.J].IsSelected = false;
+        //        }
+        //    }
+        //}
+
+        //public void SelectCellsInRange(CellPointer start, CellPointer end)
+        //{
+        //    SelectedCells.Clear();   
+        //    int startI,endI;
+        //    int startJ,endJ;
+        //    if (end.I - start.I > 0)
+        //    {
+        //        startI = start.I;
+        //        endI = end.I;
+        //    }
+        //    else
+        //    {
+        //        startI = end.I;
+        //        endI = start.I;
+        //    }
+        //    if (end.J - start.J > 0)
+        //    {
+        //        startJ = start.J;
+        //        endJ = end.J;
+        //    }
+        //    else
+        //    {
+        //        startJ = end.J;
+        //        endJ = start.J;
+        //    }
+        //    for (int i = startI;i <= endI;i++)
+        //    {
+        //        for(int j = startJ;j <= endJ;j++)
+        //        {
+        //            SelectedCells.Add(new CellPointer(i, j));
+        //            Cells[i, j].IsSelected = true;
+        //        }
+        //    }
+        //}
+
+        //public void ToggleCellState(int i,int j)
+        //{
+        //    if (Cells[i, j].State == 0)
+        //    {
+        //        Cells[i, j].State = 1;
+        //    }
+        //    else if (Cells[i, j].State == 1)
+        //    {
+        //        Cells[i, j].State = 0;
+        //    }
+        //}
+
+        public void DoHitTest(int x,int y)
+        {
+            Rectangle bf;
+            HitTest.Coord.SetCord(-1, -1);
+            HitTest.IsFieldHit = false;
+            for (int i = 0; i < GameRows; i++)
+            {
+                bf = Board[i, 0];
+                if (y >= bf.Y && y <= (bf.Y + bf.Height))
+                {
+                    for (int j = 0;j < GameCols;j++)
+                    {
+                        bf = Board[i, j];
+                        if (x >= bf.X && x <= (bf.X + bf.Width))
+                        {
+                            HitTest.Coord.SetCord(i, j);
+                            HitTest.IsFieldHit = true;
+                            i = GameRows;
                             break;
                         }
                     }
@@ -182,64 +261,111 @@ namespace GameOfLife
             }
         }
 
-        public void m_DrawBoard(bool newSize)
-        {            
-            if (newSize)
-            {
-                m_GenBoard();
-            }                    
+        public void DrawBackground(Graphics g,int width, int height)
+        {
             SolidBrush background = new SolidBrush(Color.Black);
-            _G.FillRectangle(background, new Rectangle(0, 0, _GraphicsWidth, _GraphicsHeight));
-            for (int i = 0; i < _GameRows; i++)
+            g.FillRectangle(background, new Rectangle(0, 0, width, height));
+        }
+
+        //public void Reset()
+        //{
+        //    for (int i = 0;i < GameRows;i++)
+        //    {
+        //        for (int j = 0;j < GameCols;j++)
+        //        {
+        //            Cells[i, j].State = 0;
+        //        }
+        //    }
+        //    DrawBoard();
+        //}
+
+        //public void DrawSelectionRectangle(CellPointer cp1, CellPointer cp2)
+        //{
+        //    int startI,endI;
+        //    int startJ,endJ;
+        //    Rectangle rect = new Rectangle();
+        //    if (cp1.I >= cp2.I)
+        //    {
+        //        startI = cp2.I;
+        //        endI = cp1.I;
+        //    }
+        //    else
+        //    {
+        //        startI = cp1.I;
+        //        endI = cp2.I;
+        //    }
+        //    if (cp1.J >= cp2.J)
+        //    {
+        //        startJ = cp2.J;
+        //        endJ = cp1.J;
+        //    }
+        //    else
+        //    {
+        //        startJ = cp1.J;
+        //        endJ = cp2.J;
+        //    }
+        //    rect.Width = (Cells[endI, endJ].Sizes.X + Cells[endI, endJ].Sizes.Width + BorderSize) - (Cells[startI, startJ].Sizes.X - BorderSize);
+        //    rect.Height = (Cells[endI, endJ].Sizes.Y + Cells[endI, endJ].Sizes.Height + BorderSize) - (Cells[startI, startJ].Sizes.Height - BorderSize);
+        //    rect.X = Cells[startI, startJ].Sizes.X - BorderSize;
+        //    rect.Y = Cells[startI, startJ].Sizes.Y - BorderSize;
+        //    SolidBrush shadow = new SolidBrush(Color.FromArgb(128, 136, 136, 136));
+        //    BaseGraphics.FillRectangle(shadow, rect);
+        //}
+
+        public void DrawField(Graphics g, SolidBrush[] b, Cell c, Rectangle r)
+        {
+            g.FillRectangle(b[c.State], r);
+        }    
+       
+        public Bitmap GenFitBoard(int boardWidth,int boardHeight)
+        {
+            int[] widths = FitFields(boardWidth, GameCols, BorderSize);
+            int[] heights = FitFields(boardHeight, GameRows, BorderSize);
+            int currWidth = BorderSize;
+            int currHeight = BorderSize;
+            for (int i = 0; i < GameRows; i++)
             {
-                for (int j = 0; j < _GameCols; j++)
+                currWidth = BorderSize;
+                for (int j = 0;j < GameCols;j++)
                 {
-                    m_UpdateBoardField(i, j);
-                    m_DrawField(i, j);
+                    Board[i,j] = new Rectangle(currWidth, currHeight, widths[j], heights[i]);
+                    currWidth += widths[j] + BorderSize;
                 }
+                currHeight += heights[i] + BorderSize;
             }
-        }
-
-        public void m_DrawField(int i,int j)
-        {
-            Rectangle rect = f_GetFieldRect(i, j);
-            BoardField bd = _Board[i, j];
-            _G.FillRectangle(new SolidBrush(bd._Color), rect);         
-        }
-
-        public Rectangle f_GetFieldRect(int i,int j)
-        {
-            Rectangle rect = new Rectangle();
-            BoardField bd = _Board[i, j];
-            rect.Width = bd._Width;
-            rect.Height = bd._Height;
-            rect.X = bd._X;
-            rect.Y = bd._Y;
-            return rect;
-        }
-
-        public void m_GenBoard()
-        {
-            int[] widths = f_FitFields(_GraphicsWidth, _GameCols, _BorderSize);
-            int[] heights = f_FitFields(_GraphicsHeight, _GameRows, _BorderSize);
-            int currWidth = _BorderSize;
-            int currHeight = _BorderSize;
-            for (int i = 0; i < _GameRows; i++)
+            Bitmap bmp = new Bitmap(boardWidth, boardHeight);
+            using(Graphics g = Graphics.FromImage(bmp))
             {
-                currWidth = _BorderSize;
-                for (int j = 0;j < _GameCols;j++)
-                {
-                    _Board[i, j]._Width = widths[j];
-                    _Board[i, j]._Height = heights[i];
-                    _Board[i, j]._X = currWidth;
-                    _Board[i, j]._Y = currHeight;
-                    currWidth += widths[j] + _BorderSize;
-                }
-                currHeight += heights[i] + _BorderSize;
+                DrawBackground(g, boardWidth, boardHeight);
             }
+            return bmp;
         }
 
-        T[,] f_InitializeArray<T>(int rows,int cols) where T : new()
+        public Bitmap GenFixedBoard(int cellWidth, int cellHeight)
+        {
+            int currWidth = BorderSize;
+            int currHeight = BorderSize;
+            for (int i = 0;i < GameRows;i++)
+            {
+                currWidth = BorderSize;
+                for (int j = 0;j < GameCols;j++)
+                {
+                    Board[i, j] = new Rectangle(currWidth, currHeight, cellWidth, cellHeight);
+                    currWidth += cellWidth + BorderSize;
+                }
+                currHeight += cellHeight + BorderSize;
+            }
+            int boardWidth = (cellWidth + BorderSize) * GameCols + BorderSize;
+            int boardHeight = (cellHeight + BorderSize) * GameRows + BorderSize;
+            Bitmap bmp = new Bitmap(boardWidth, boardHeight);
+            using (Graphics g = Graphics.FromImage(bmp))
+            {
+                DrawBackground(g, boardWidth, boardHeight);
+            }
+            return bmp;
+        }
+
+        public T[,] InitializeArray<T>(int rows, int cols) where T : new()
         {
             T[,] array = new T[rows, cols];
             for (int i = 0; i < rows; i++)
@@ -252,7 +378,7 @@ namespace GameOfLife
             return array;
         }
 
-        public int[] f_FitFields(int imageWidth,int fieldsCount,int borderSize)
+        public int[] FitFields(int imageWidth,int fieldsCount,int borderSize)
         {
             int[] widths = new int[fieldsCount];
             int fieldsWidth = imageWidth - (fieldsCount + 1) * borderSize;

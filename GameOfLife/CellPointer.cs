@@ -8,23 +8,24 @@ namespace GameOfLife
 {
     public class CellPointer
     {
-        public int _I { get; set; }
-        public int _J { get; set; }
+        public int I { get; set; }
+        public int J { get; set; }
 
         public CellPointer()
         {
-
+            I = -1;
+            J = -1;
         }
 
         public CellPointer(int i,int j)
         {
-            _I = i;
-            _J = j;
+            I = i;
+            J = j;
         }
 
-        public bool f_Equals(CellPointer cp)
+        public bool IsEqual(CellPointer cp)
         {
-            if (_I == cp._I && _J == cp._J)
+            if (I == cp.I && J == cp.J)
             {
                 return true;
             }
@@ -34,10 +35,16 @@ namespace GameOfLife
             }
         }
 
-        public void m_SetCord(CellPointer cp)
+        public void SetCord(CellPointer cp)
         {
-            _I = cp._I;
-            _J = cp._J;
+            I = cp.I;
+            J = cp.J;
+        }
+
+        public void SetCord(int i,int j)
+        {
+            I = i;
+            J = j;
         }
 
     }
