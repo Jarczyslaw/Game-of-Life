@@ -23,8 +23,8 @@ namespace GameOfLife
             public int MapOffset { get; set; }
         }
 
-        public BackgroundWorker EndWorker { get; set; }
-        public BackgroundWorker[] Workers { get; set; }
+        public Thread EndThread { get; set; }
+        public Thread[] Threads { get; set; }
         public Bitmap Map { get; set; }
         public Segment[] Segments { get; set; }
         public int WorkersDone { get; set; }
@@ -32,19 +32,34 @@ namespace GameOfLife
         private readonly object StatusLock = new object();
         public Stopwatch Timer { get; set; }
         public long Interval { get; set; }
+        delegate void WorkCallback(int id);
+        delegate void EndCallback(long obj);
 
         public ParallelEngine()
         {
-            EndWorker = new BackgroundWorker();               
-            EndWorker.DoWork += new DoWorkEventHandler(EndWork);
-            EndWorker.RunWorkerCompleted += new RunWorkerCompletedEventHandler(EndWorkComplete);
             Timer = new Stopwatch();
             Interval = 1000;
         }
 
-        private void EndWorkComplete(object sender, RunWorkerCompletedEventArgs e)
+        private void EndWork(object obj)
         {
-            long elapsed = (long)e.Result;
+            EndCallback ec = new EndCallback(EndWorkComplete);
+            // finish updating and merge all segments
+            Storage.Game.EndIteration();
+            MergeAllSegments();
+            Timer.Stop();
+            long elapsed = Timer.ElapsedMilliseconds;
+            int restTime = Convert.ToInt32(Interval - elapsed);
+            if (restTime > 0)
+            {
+                Thread.Sleep(restTime);
+            }
+            Storage.MainForm.Invoke(ec, elapsed);
+        }
+
+        private void EndWorkComplete(long obj)
+        {
+            long elapsed = obj;
             Storage.MainForm.RefreshBoard(Map);
             if (ContinousWork)
             {
@@ -66,26 +81,17 @@ namespace GameOfLife
         {
             using (Graphics g = Graphics.FromImage(Map))
             {
+                Rectangle rect = new Rectangle();
+                rect.Y = 0;
+                rect.Height = Map.Height;
                 for (int i = 0; i < Segments.Length; i++)
                 {
-                    g.DrawImageUnscaled(Segments[i].Map,Segments[i].MapOffset,0);
+                    //g.DrawImageUnscaled(Segments[i].Map,Segments[i].MapOffset,0);
+                    rect.X = Segments[i].MapOffset;
+                    rect.Width = Segments[i].MapWidth;
+                    g.DrawImage(Segments[i].Map, Segments[i].MapOffset, 0, rect, GraphicsUnit.Pixel);
                 }
             }
-        }
-
-        private void EndWork(object sender, DoWorkEventArgs e)
-        {
-            // finish updating and merge all segments
-            Storage.Game.EndIteration();
-            MergeAllSegments();
-            Timer.Stop();
-            long elapsed = Timer.ElapsedMilliseconds;
-            int restTime = Convert.ToInt32(Interval - elapsed);
-            if (restTime > 0)
-            {
-                Thread.Sleep(restTime);
-            }
-            e.Result = elapsed;
         }
 
         public void AddRandomIter()
@@ -112,15 +118,7 @@ namespace GameOfLife
         public void Init(int count)
         {
             // init all workers
-            Workers = new BackgroundWorker[count];
-            for(int i = 0;i < Workers.Length;i++)
-            {
-                Workers[i] = new BackgroundWorker();            
-                Workers[i].DoWork += new DoWorkEventHandler(DoWork);
-                Workers[i].RunWorkerCompleted += new RunWorkerCompletedEventHandler(WorkComplete);
-                Workers[i].WorkerSupportsCancellation = true;
-                Storage.SettingsForm.AddLogText("Worker_" + i + " created");
-            }
+            Threads = new Thread[count];
 
             // init graphics
             Map = Storage.Game.GenFixedBoard(1, 1);
@@ -153,36 +151,17 @@ namespace GameOfLife
                 Segment s = new Segment();
                 s.ColumnsCount = segmentsCols[i];
                 s.ColumnsOffset = colsOffsets[i];
-                s.Map = new Bitmap(mapsWidth[i], Map.Height);
+                s.Map = new Bitmap(Map.Width, Map.Height);
                 s.MapWidth = mapsWidth[i];
                 s.MapOffset = mapsOffsets[i];
                 Segments[i] = s;
             }
         }
 
-        private void WorkComplete(object sender, RunWorkerCompletedEventArgs e)
+        private void DoWork(object obj)
         {
-            int workerId = (int)e.Result;
-            Storage.SettingsForm.AddLogText("Worker_" + workerId + " finished in: " + Thread.CurrentThread.ManagedThreadId);
-            int status;
-            lock (StatusLock)
-            {
-                WorkersDone++;
-                status = WorkersDone;
-            }
-            if (status == Workers.Length)
-            {
-                lock (StatusLock)
-                {
-                    WorkersDone = 0;
-                }
-                EndWorker.RunWorkerAsync(); 
-            }              
-        }
-
-        private void DoWork(object sender, DoWorkEventArgs e)
-        {           
-            int workerId = (int)e.Argument;
+            int workerId = (int)obj;
+            WorkCallback wc = new WorkCallback(WorkComplete);
             //Storage.SettingsForm.AddLogText("Worker_" + workerId + " works in: " + Thread.CurrentThread.ManagedThreadId);
             Segment s = Segments[workerId];
             // logic
@@ -195,7 +174,27 @@ namespace GameOfLife
                     Storage.Game.NewIteration,
                     s.ColumnsOffset, s.ColumnsOffset + s.ColumnsCount - 1);
             }
-            e.Result = workerId;
+            Storage.MainForm.Invoke(wc, workerId);
+        }
+
+        private void WorkComplete(int id)
+        {
+            Storage.SettingsForm.AddLogText("Worker_" + id + " finished in: " + Thread.CurrentThread.ManagedThreadId);
+            int status;
+            lock (StatusLock)
+            {
+                WorkersDone++;
+                status = WorkersDone;
+            }
+            if (status == Threads.Length)
+            {
+                lock (StatusLock)
+                {
+                    WorkersDone = 0;
+                }
+                EndThread = new Thread(new ParameterizedThreadStart(EndWork));
+                EndThread.Start();
+            }              
         }
 
         public void LaunchWorkers()
@@ -209,9 +208,11 @@ namespace GameOfLife
                 WorkersDone = 0;
             }
             Timer.Restart();
-            for(int i = 0;i < Workers.Length;i++)
+            for(int i = 0;i < Threads.Length;i++)
             {
-                Workers[i].RunWorkerAsync(i);
+                Threads[i] = new Thread(new ParameterizedThreadStart(DoWork));
+                Threads[i].Priority = ThreadPriority.BelowNormal;
+                Threads[i].Start(i);
                 Storage.SettingsForm.AddLogText("Worker_" + i + " started");
             }
         }

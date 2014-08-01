@@ -39,7 +39,7 @@ namespace GameOfLife
             UiConfig();
 
             ParallelEngine e = new ParallelEngine();
-            e.Init(1);
+            e.Init(2);
             e.AddRandomIter();
             Storage.Engine = e;
 
