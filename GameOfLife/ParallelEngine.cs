@@ -23,6 +23,7 @@ namespace GameOfLife
             public int MapOffset { get; set; }
         }
 
+        public BackgroundWorker[] Workers { get; set; }
         public BackgroundWorker LaunchWorker { get; set; }
         public Bitmap Map { get; set; }
         public Segment[] Segments { get; set; }
@@ -50,11 +51,17 @@ namespace GameOfLife
         public void Init(int count)
         {
             ThreadsCount = count;
+            Workers = new BackgroundWorker[count];
             Finished = new ManualResetEvent[count];
             SetEventVal(false);
             LaunchWorker = new BackgroundWorker();
             LaunchWorker.DoWork += new DoWorkEventHandler(ThreadsExecution);
             LaunchWorker.RunWorkerCompleted += new RunWorkerCompletedEventHandler(LaunchComplete);
+            for (int i = 0; i < count;i++ )
+            {
+                Workers[i] = new BackgroundWorker();
+                Workers[i].DoWork += new DoWorkEventHandler(DoWork);
+            }
             // init graphics
             Map = Storage.Game.GenFixedBoard(1, 1);
             Segments = new Segment[count];
@@ -125,11 +132,19 @@ namespace GameOfLife
             Timer.Restart();
             for (int i = 0; i < ThreadsCount; i++)
             {
-                ThreadPool.QueueUserWorkItem(DoWork, i);
+                Workers[i].RunWorkerAsync(i);
             }
             WaitHandle.WaitAll(Finished);
+            // drawing
+            using (Graphics g = Graphics.FromImage(Map))
+            {
+                GraphicsExtensions.ToLowQuality(g);
+                Storage.Game.DrawIteration(g, Map.Width, Map.Height,
+                    Storage.Game.NewIteration,
+                    0, Storage.Game.GameCols - 1);
+            }
             Storage.Game.EndIteration();
-            MergeAllSegments();
+            //MergeAllSegments();
             Timer.Stop();
             long elapsed = Timer.ElapsedMilliseconds;
             int restTime = Convert.ToInt32(Interval - elapsed);
@@ -166,23 +181,23 @@ namespace GameOfLife
             Storage.SettingsForm.UpdateGameInfo(ips);
         }
 
-        private void DoWork(object obj)
+        private void DoWork(object sender, DoWorkEventArgs e)
         {
-            int tId = (int)obj;
+            int tId = (int)e.Argument;
             //Storage.MainForm.Invoke(log, "Thread_" + tId + " in: " + Thread.CurrentThread.ManagedThreadId + " started");
             //Storage.SettingsForm.AddLogText("Worker_" + workerId + " works in: " + Thread.CurrentThread.ManagedThreadId);
             Segment s = Segments[tId];
             // logic
             Storage.Game.UpdateNewIteration(s.ColumnsOffset, s.ColumnsOffset + s.ColumnsCount - 1);
 
-            // drawing
-            using (Graphics g = Graphics.FromImage(s.Map))
-            {
-                GraphicsExtensions.ToLowQuality(g);
-                Storage.Game.DrawIteration(g, s.Map.Width, s.Map.Height,
-                    Storage.Game.NewIteration,
-                    s.ColumnsOffset, s.ColumnsOffset + s.ColumnsCount - 1);
-            }
+            //// drawing
+            //using (Graphics g = Graphics.FromImage(s.Map))
+            //{
+            //    GraphicsExtensions.ToLowQuality(g);
+            //    Storage.Game.DrawIteration(g, s.Map.Width, s.Map.Height,
+            //        Storage.Game.NewIteration,
+            //        s.ColumnsOffset, s.ColumnsOffset + s.ColumnsCount - 1);
+            //}
             Finished[tId].Set();
         }
 
