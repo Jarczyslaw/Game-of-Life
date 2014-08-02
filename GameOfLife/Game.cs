@@ -118,11 +118,13 @@ namespace GameOfLife
             {
                 pallete[i] = new SolidBrush(CellStates[i].BoardColor);
             }
+            // shift cells to left egde of bmp
+            int segmentShift = Board[0, startCol].X - BorderSize;
             for (int i = 0; i < GameRows; i++)
             {
                 for (int j = startCol; j <= endCol; j++)
                 {
-                    DrawField(g, pallete, cells[i, j], Board[i,j]);
+                    DrawField(g, pallete, cells[i, j], Board[i,j],segmentShift);
                 }
             }
             
@@ -312,9 +314,9 @@ namespace GameOfLife
         //    BaseGraphics.FillRectangle(shadow, rect);
         //}
 
-        public void DrawField(Graphics g, SolidBrush[] b, Cell c, Rectangle r)
+        public void DrawField(Graphics g, SolidBrush[] b, Cell c, Rectangle r, int shiftToLeft)
         {
-            g.FillRectangle(b[c.State], r);
+            g.FillRectangle(b[c.State], r.X - shiftToLeft, r.Y, r.Width, r.Height);
         }    
        
         public Bitmap GenFitBoard(int boardWidth,int boardHeight)
