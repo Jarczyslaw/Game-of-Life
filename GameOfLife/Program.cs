@@ -16,7 +16,21 @@ namespace GameOfLife
         {
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
-            Application.Run(new FormMain());
+
+            Storage.Game = new Game(200, 200);
+            Storage.MainForm = new FormMain();
+            Storage.ControlPanel = new FormControlPanel(); 
+            Storage.Engine = new ParallelEngine();
+            Storage.Drawer = new Drawer();
+
+            Storage.ControlPanel.InitForm();
+
+            Storage.Drawer.Init(false, 2, 2, 1);
+
+            Storage.Engine.Init(1);
+            Storage.Engine.AddRandomIter();
+
+            Application.Run(Storage.MainForm);
         }
     }
 }

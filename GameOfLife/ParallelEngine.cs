@@ -16,25 +16,24 @@ namespace GameOfLife
     {
         public class Segment
         {
-            public Bitmap Map { get; set; }
             public int ColumnsCount { get; set; }
             public int ColumnsOffset { get; set; }
-            public int MapWidth { get; set; }
-            public int MapOffset { get; set; }
         }
 
-        public BackgroundWorker[] Workers { get; set; }
-        public BackgroundWorker LaunchWorker { get; set; }
-        public Bitmap Map { get; set; }
+        public Thread[] Threads { get; set; }
+        public BackgroundWorker Launcher0 { get; set; }
+        public BackgroundWorker Launcher1 { get; set; }
         public Segment[] Segments { get; set; }
-        public bool ContinousWork { get; set; }
+        public int Steps { get; set; }
         public Stopwatch Timer { get; set; }
         public long Interval { get; set; }
-        ManualResetEvent[] Finished { get; set; }
-        public int ThreadsCount  { get; set; }
+        public ManualResetEvent[] ThreadsFinished { get; set; }
+        public EventWaitHandle[] ThreadsLaunch { get; set; }
         public delegate void LogTextCallback(string txt);
-        public delegate void ResultCallback(Bitmap bmp);
+        public delegate void ResultCallback();
         public delegate void InfoUpdateCallback(float f);
+
+        public readonly object Block = new object();
 
         public ParallelEngine()
         {
@@ -42,174 +41,205 @@ namespace GameOfLife
             Interval = 1000;
         }
 
-        public void SetEventVal(bool val)
+        public void ManualEventSetVal(ManualResetEvent[] man, bool val)
         {
-            for (int i = 0; i < ThreadsCount; i++)
-                Finished[i] = new ManualResetEvent(val);
+            for(int i = 0;i < man.Length;i++)
+            {
+                if (val)
+                    man[i].Set();
+                else
+                    man[i].Reset();
+            }
         }
 
-        public void Init(int count)
+        public void Init(int thrCnt)
         {
-            ThreadsCount = count;
-            Workers = new BackgroundWorker[count];
-            Finished = new ManualResetEvent[count];
-            SetEventVal(false);
-            LaunchWorker = new BackgroundWorker();
-            LaunchWorker.DoWork += new DoWorkEventHandler(ThreadsExecution);
-            LaunchWorker.RunWorkerCompleted += new RunWorkerCompletedEventHandler(LaunchComplete);
-            for (int i = 0; i < count;i++ )
+            // threads
+            ThreadsFinished = new ManualResetEvent[thrCnt];
+            ThreadsLaunch = new EventWaitHandle[thrCnt];
+            Threads = new Thread[thrCnt];
+            for (int i = 0; i < thrCnt; i++)
             {
-                Workers[i] = new BackgroundWorker();
-                Workers[i].DoWork += new DoWorkEventHandler(DoWork);
+                ThreadsFinished[i] = new ManualResetEvent(false);
+                ThreadsLaunch[i] = new AutoResetEvent(false);
+                Threads[i] = new Thread(new ParameterizedThreadStart(ThreadWork));
+                Threads[i].IsBackground = true;
             }
-            // init graphics
-            Map = Storage.Game.GenFixedBoard(1, 1);
-            Segments = new Segment[count];
+            // workers
+            Launcher0 = new BackgroundWorker();
+            Launcher0.DoWork += new DoWorkEventHandler(WithDrawing);
+            Launcher0.RunWorkerCompleted += new RunWorkerCompletedEventHandler(LauncherWorkComplete);
+            Launcher1 = new BackgroundWorker();
+            Launcher1.DoWork += new DoWorkEventHandler(WithoutDrawing);
+            Launcher1.RunWorkerCompleted += new RunWorkerCompletedEventHandler(LauncherWorkComplete);           
             // count segments columns width and offsets
-            int[] segmentsCols = new int[count];
-            int cols = Storage.Game.GameCols / count;
-            for (int i = 0; i < count - 1; i++)
+            Segments = new Segment[thrCnt];
+            int[] segmentsCols = new int[thrCnt];
+            int cols = Storage.Game.GameCols / thrCnt;
+            for (int i = 0; i < thrCnt - 1; i++)
             {
                 segmentsCols[i] = cols;
             }
-            segmentsCols[count - 1] = Storage.Game.GameCols - (count - 1) * cols;
+            segmentsCols[thrCnt - 1] = Storage.Game.GameCols - (thrCnt - 1) * cols;
             int[] colsOffsets = CountOffsets(segmentsCols);
-            // count segments map widths and offsets
-            int startX = 0;
-            int endX = 0;
-            int[] mapsWidth = new int[count];
-            for (int i = 0; i < Segments.Length; i++)
-            {
-                startX = Storage.Game.Board[0, colsOffsets[i]].X - Storage.Game.BorderSize;
-                endX = Storage.Game.Board[0, colsOffsets[i] + segmentsCols[i] - 1].X + Storage.Game.Board[0, colsOffsets[i] + segmentsCols[i] - 1].Width;
-                mapsWidth[i] = endX - startX;
-                if (i == Segments.Length - 1)
-                    mapsWidth[i] += Storage.Game.BorderSize;
-            }
-            int[] mapsOffsets = CountOffsets(mapsWidth);
-            // finally create segments;
-            for (int i = 0; i < count; i++)
+            for (int i = 0; i < thrCnt; i++)
             {
                 Segment s = new Segment();
                 s.ColumnsCount = segmentsCols[i];
                 s.ColumnsOffset = colsOffsets[i];
-                s.Map = new Bitmap(mapsWidth[i], Map.Height);
-                s.MapWidth = mapsWidth[i];
-                s.MapOffset = mapsOffsets[i];
                 Segments[i] = s;
+            }
+            // run threads
+            for (int i = 0; i < thrCnt; i++)
+            {
+                Threads[i].Start(i);    
             }
         }
 
-        public void RunSingleStep()
+        public void Run(int steps, bool draw)
         {
-            ContinousWork = false;
-            Storage.SettingsForm.AddLogText("SINGLE STEP WORK START");
-            LaunchThreads();
-        }
-
-        public void RunSimulation()
-        {
-            ContinousWork = true;
-            Storage.SettingsForm.AddLogText("SIMULATION STARTED");
-            LaunchThreads();
+            if (Storage.Game.GameState != Game.GameStates.Run)
+            {
+                Storage.Game.GameState = Game.GameStates.Run;
+                Storage.ControlPanel.UpdateGameInfo(-1);
+                lock (Block)
+                    Steps = steps;
+                if (steps == 0)
+                    Debug.WriteLine("SIMULATION STARTED");
+                else
+                    Debug.WriteLine("CUSTOM STEPS: " + steps + " WORK START");
+                if (draw)
+                    Launcher0.RunWorkerAsync();
+                else
+                    Launcher1.RunWorkerAsync();
+            } 
         }
 
         public void Stop()
         {
-            ContinousWork = false;
+            lock (Block)
+                Steps = -1;
         }
 
-        public void LaunchThreads()
+        public void WithoutDrawing(object sender, DoWorkEventArgs e)
         {
-            Storage.SettingsForm.AddLogText("New interation started");
-            LaunchWorker.RunWorkerAsync();
-        }
+            int iter = 0;
+            // delegates
+            ResultCallback refresh = new ResultCallback(Storage.MainForm.RefreshBoard);
+            InfoUpdateCallback fps = new InfoUpdateCallback(Storage.ControlPanel.UpdateGameInfo);
 
-        public void ThreadsExecution(object sender, DoWorkEventArgs e)
-        {
-            Storage.Game.GameState = Game.GameStates.Run;
-            Storage.Game.StartNewIteration();
-            Timer.Restart();
-            for (int i = 0; i < ThreadsCount; i++)
+            Debug.WriteLine("Launcher without drawing in thread: " + Thread.CurrentThread.ManagedThreadId + " started");
+            for (; ; )
             {
-                Workers[i].RunWorkerAsync(i);
-            }
-            WaitHandle.WaitAll(Finished);
-            // drawing
-            using (Graphics g = Graphics.FromImage(Map))
-            {
-                GraphicsExtensions.ToLowQuality(g);
-                Storage.Game.DrawIteration(g, Map.Width, Map.Height,
-                    Storage.Game.NewIteration,
-                    0, Storage.Game.GameCols - 1);
-            }
-            Storage.Game.EndIteration();
-            //MergeAllSegments();
-            Timer.Stop();
-            long elapsed = Timer.ElapsedMilliseconds;
-            int restTime = Convert.ToInt32(Interval - elapsed);
-            if (restTime > 0)
-            {
-                Thread.Sleep(restTime);
-            }
-            e.Result = elapsed;
-        }
-
-        private void LaunchComplete(object sender, RunWorkerCompletedEventArgs e)
-        {
-            Storage.MainForm.RefreshBoard(Map);
-            long elapsed = (long)e.Result;
-            float ips = 0;
-            Storage.SettingsForm.AddLogText("All threads finished in: " + elapsed);
-            SetEventVal(false);
-            if (Interval - elapsed > 0)
-            {
-                ips = 1000f / Interval;
-            }
-            else
-            {
-                ips = 1000f / elapsed;
-            }
-            if (ContinousWork)
-            {
-                LaunchThreads();
-            }
-            else
-            {
-                Storage.Game.GameState = Game.GameStates.Paused;
-            }
-            Storage.SettingsForm.UpdateGameInfo(ips);
-        }
-
-        private void DoWork(object sender, DoWorkEventArgs e)
-        {
-            int tId = (int)e.Argument;
-            //Storage.MainForm.Invoke(log, "Thread_" + tId + " in: " + Thread.CurrentThread.ManagedThreadId + " started");
-            //Storage.SettingsForm.AddLogText("Worker_" + workerId + " works in: " + Thread.CurrentThread.ManagedThreadId);
-            Segment s = Segments[tId];
-            // logic
-            Storage.Game.UpdateNewIteration(s.ColumnsOffset, s.ColumnsOffset + s.ColumnsCount - 1);
-
-            //// drawing
-            //using (Graphics g = Graphics.FromImage(s.Map))
-            //{
-            //    GraphicsExtensions.ToLowQuality(g);
-            //    Storage.Game.DrawIteration(g, s.Map.Width, s.Map.Height,
-            //        Storage.Game.NewIteration,
-            //        s.ColumnsOffset, s.ColumnsOffset + s.ColumnsCount - 1);
-            //}
-            Finished[tId].Set();
-        }
-
-        public void MergeAllSegments()
-        {
-            using (Graphics g = Graphics.FromImage(Map))
-            {
-                GraphicsExtensions.ToLowQuality(g);
-                for (int i = 0; i < Segments.Length; i++)
+                // check loop continouity
+                if (Steps == -1)
                 {
-                    g.DrawImageUnscaled(Segments[i].Map,Segments[i].MapOffset,0);
+                    break;
                 }
+                else if (Steps > 0)
+                {
+                    if (iter >= Steps)
+                        break;
+                }
+                Timer.Restart();
+                // start threads and wait
+                Storage.Game.StartNewIteration();
+                Debug.WriteLine("launcher new iter");
+                for (int i = 0; i < ThreadsLaunch.Length; i++)
+                    ThreadsLaunch[i].Set();
+                WaitHandle.WaitAll(ThreadsFinished);
+                ManualEventSetVal(ThreadsFinished, false);
+                Storage.Game.EndIteration();
+                Debug.WriteLine("update finished in: " + Timer.ElapsedMilliseconds + "ms");
+                long elapsed = Timer.ElapsedMilliseconds;
+                Storage.MainForm.Invoke(fps, 1000f / elapsed);
+                iter++;
+            }
+            Storage.Drawer.DrawIteration(-1);
+            Storage.MainForm.Invoke(refresh);
+            Debug.WriteLine("last iteration has been drawn");
+            e.Result = iter;
+        }
+
+        public void WithDrawing(object sender, DoWorkEventArgs e)
+        {
+            int iter = 0;
+            // delegates
+            ResultCallback refresh = new ResultCallback(Storage.MainForm.RefreshBoard);
+            InfoUpdateCallback fps = new InfoUpdateCallback(Storage.ControlPanel.UpdateGameInfo);
+
+            Debug.WriteLine("Launcher with drawing in thread: " + Thread.CurrentThread.ManagedThreadId + " started");
+            for (; ; )
+            {
+                // check loop continouity
+                if (Steps == -1)
+                {
+                    break;
+                }
+                else if (Steps > 0)
+                {
+                    if (iter >= Steps)
+                        break;
+                }
+                Timer.Restart();
+                // start threads and wait
+                Storage.Game.StartNewIteration();
+                Debug.WriteLine("launcher new iter");
+                for (int i = 0; i < ThreadsLaunch.Length; i++)
+                    ThreadsLaunch[i].Set();
+                WaitHandle.WaitAll(ThreadsFinished);
+                ManualEventSetVal(ThreadsFinished, false);
+                Storage.Game.EndIteration();
+                Debug.WriteLine("update finished in: " + Timer.ElapsedMilliseconds + "ms");
+                Storage.Drawer.DrawIteration(-1);               
+                Storage.MainForm.Invoke(refresh);
+                Debug.WriteLine("drawing finished in: " + Timer.ElapsedMilliseconds + "ms");
+                // wait if needed
+                long elapsed = Timer.ElapsedMilliseconds;
+                if (iter != Steps - 1) // wait except last iteration
+                {
+                    int restTime = Convert.ToInt32(Interval - elapsed);
+                    if (restTime > 0)
+                    {
+                        Thread.Sleep(restTime);
+                    }
+                }
+                // ips
+                float ips;
+                if (Interval - elapsed > 0)
+                {
+                    ips = 1000f / Interval;
+                }
+                else
+                {
+                    ips = 1000f / elapsed;
+                }
+                Storage.MainForm.Invoke(fps, ips);
+                iter++;
+            }                     
+            e.Result = iter;
+        }
+
+        private void LauncherWorkComplete(object sender, RunWorkerCompletedEventArgs e)
+        {
+            int iters = (int)e.Result;
+            Debug.WriteLine("FINISHED ITERATIONS: " + iters);
+            Storage.Game.GameState = Game.GameStates.Paused;
+            Storage.ControlPanel.UpdateGameInfo(-1);
+        }
+
+        private void ThreadWork(object obj)
+        {
+            int tId = (int)obj;
+            Segment s = Segments[tId];
+            while(true)
+            {
+                ThreadsLaunch[tId].WaitOne();
+                Debug.WriteLine("thread_" + tId + " in: " + Thread.CurrentThread.ManagedThreadId + " update started");
+                // logic
+                Storage.Game.UpdateNewIteration(s.ColumnsOffset, s.ColumnsOffset + s.ColumnsCount - 1);
+                ThreadsFinished[tId].Set();
+                Debug.WriteLine("thread_" + tId + " in thread: " + Thread.CurrentThread.ManagedThreadId + " update finished");
             }
         }
 
@@ -233,17 +263,29 @@ namespace GameOfLife
             {
                 for (int j = 0; j < Storage.Game.GameCols; j++)
                 {
-                    Storage.Game.NewIteration[i, j].State = r.Next(0, 2);
+                    Storage.Game.Current[i, j].State = (byte)r.Next(0, 2);
                 }
-            }
-            using (Graphics g = Graphics.FromImage(Map))
-            {
-                Storage.Game.DrawIteration(g, Map.Width, Map.Height,
-                    Storage.Game.NewIteration,
-                    0, Storage.Game.GameCols - 1);
-            }
+            }          
             Storage.Game.EndIteration();
-            Storage.MainForm.RefreshBoard(Map);
+            Storage.Drawer.DrawIteration(-1);
+            Storage.MainForm.RefreshBoard();
+            Storage.ControlPanel.UpdateGameInfo(-1);
+        }
+
+        public void CreateIteration(bool f)
+        {
+            Storage.Game.StartNewIteration();
+            for (int i = 0; i < Storage.Game.GameRows; i++)
+            {
+                for (int j = 0; j < Storage.Game.GameCols; j++)
+                {
+                    Storage.Game.Current[i, j].State = (byte)(f ? 1 : 0);
+                }
+            }            
+            Storage.Game.EndIteration();
+            Storage.Drawer.DrawIteration(-1);
+            Storage.MainForm.RefreshBoard();
+            Storage.ControlPanel.UpdateGameInfo(-1);
         }
     }
 }

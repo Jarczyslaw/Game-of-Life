@@ -13,7 +13,7 @@ namespace GameOfLife
         public CustomForm()
         {
             CloseEvent = true;
-            FormClosing += new FormClosingEventHandler(CloseAllEventHandler);
+            //FormClosing += new FormClosingEventHandler(CloseAllEventHandler);
         }
 
         private void CloseAllEventHandler(object sender, EventArgs args)
@@ -22,8 +22,8 @@ namespace GameOfLife
             {
                 if (sender is FormMain)
                 {
-                    Storage.SettingsForm.CloseEvent = false;
-                    Storage.SettingsForm.Close();
+                    Storage.ControlPanel.CloseEvent = false;
+                    Storage.ControlPanel.Close();
                 }
                 else
                 {

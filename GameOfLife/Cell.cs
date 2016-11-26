@@ -6,13 +6,8 @@ using System.Threading.Tasks;
 
 namespace GameOfLife
 {
-    public class Cell
+    public struct Cell
     {
-        public int State { get; set; }
-
-        public Cell()
-        {
-            State = 0;
-        }
+        public byte State;
     }
 }
